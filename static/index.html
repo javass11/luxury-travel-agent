@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Luxury Travel Agent</title>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 50px auto; }
+        input { width: 100%; padding: 10px; margin: 5px 0; }
+        button { width: 100%; padding: 10px; background: #1a73e8; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>🌍 Luxury Travel Deal Finder</h1>
+    <form id="searchForm">
+        <input type="text" placeholder="From (e.g., ORD)" id="origin" value="ORD">
+        <input type="text" placeholder="To (e.g., MIA)" id="destination" value="MIA">
+        <input type="date" id="departure" required>
+        <button type="submit">Find Deals</button>
+    </form>
+    <div id="results"></div>
+    <script>
+        document.getElementById('searchForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = {
+                origin: document.getElementById('origin').value,
+                destination: document.getElementById('destination').value,
+                departure_date: document.getElementById('departure').value,
+                hotel_destination: document.getElementById('destination').value,
+                checkin: document.getElementById('departure').value,
+                checkout: new Date(document.getElementById('departure').value + 'T00:00:00').toISOString().split('T')[0]
+            };
+
+            const res = await fetch('/api/deals/analyze', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            const deals = await res.json();
+            document.getElementById('results').innerHTML = '<pre>' + JSON.stringify(deals, null, 2) + '</pre>';
+        });
+    </script>
+</body>
+</html>
