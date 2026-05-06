@@ -22,3 +22,4 @@ pytest-xdist>=3.5.0
 
 # Performance
 redis>=4.5.0
+gunicorn>=21.0.0
