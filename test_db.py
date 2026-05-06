@@ -1,4 +1,9 @@
-from database import LuxuryTravelDB
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from src.database import LuxuryTravelDB
 
 db = LuxuryTravelDB()
 
@@ -10,5 +15,7 @@ print(f"✓ Hotels in database: {len(hotels)}")
 
 deals = db.get_recent_deals(limit=5)
 print(f"✓ Deals in database: {len(deals)}")
+
+db.close()
 
 print("\n✅ All database tests passed!")
