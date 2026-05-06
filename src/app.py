@@ -13,7 +13,7 @@ from .agent import LuxuryTravelAssistant
 from .api_clients.amadeus import AmadeusFlightAPI
 from .api_clients.hotels import HotelSearchAPI
 from .cache import cache
-from .redemption import RedemptionOption, evaluate_redemptions, find_best_redemption, redemption_to_dict
+from .redemption import evaluate_redemption, redemption_to_dict
 
 load_dotenv()
 
@@ -259,7 +259,7 @@ def save_deal():
 
 @app.route("/api/redemptions/evaluate", methods=["POST"])
 def evaluate_redemptions_endpoint():
-    """Evaluate and compare redemption options by CPP value (points per cent)"""
+    """Evaluate redemption options by CPP value (cents per point)"""
     data = request.json
     options_data = data.get("options", [])
 
@@ -267,28 +267,31 @@ def evaluate_redemptions_endpoint():
         return jsonify({"error": "No redemption options provided"}), 400
 
     try:
-        # Convert to RedemptionOption objects
-        options = [
-            RedemptionOption(
-                name=opt.get("name"),
+        # Evaluate each redemption
+        evaluated = []
+        best = None
+        best_cpp = -1
+
+        for opt in options_data:
+            redemption = evaluate_redemption(
                 redemption_type=opt.get("redemption_type"),
                 cash_price=float(opt.get("cash_price", 0)),
                 points_required=int(opt.get("points_required", 0)),
                 taxes_and_fees=float(opt.get("taxes_and_fees", 0)),
-                notes=opt.get("notes")
             )
-            for opt in options_data
-        ]
+            evaluated.append(redemption_to_dict(redemption))
 
-        # Evaluate redemptions
-        evaluated = evaluate_redemptions(options)
+            # Track best
+            if redemption.cpp > best_cpp:
+                best_cpp = redemption.cpp
+                best = redemption_to_dict(redemption)
 
-        # Find best
-        best = find_best_redemption(evaluated)
+        # Sort by CPP (descending)
+        evaluated.sort(key=lambda x: x["cpp"], reverse=True)
 
         return jsonify({
-            "redemptions": [redemption_to_dict(r) for r in evaluated],
-            "best_redemption": redemption_to_dict(best) if best else None,
+            "redemptions": evaluated,
+            "best_redemption": best,
             "count": len(evaluated)
         }), 200
 

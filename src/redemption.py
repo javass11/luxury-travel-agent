@@ -1,27 +1,15 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 
 @dataclass(frozen=True)
-class RedemptionOption:
-    name: str
-    redemption_type: str  # "flight" or "hotel"
-    cash_price: float
-    points_required: int
-    taxes_and_fees: float = 0.0
-    notes: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class EvaluatedRedemption:
-    name: str
+class RedemptionValue:
     redemption_type: str
     cash_price: float
     points_required: int
     taxes_and_fees: float
     cpp: float
     value_tier: str
-    notes: Optional[str]
 
 
 def calculate_cpp(
@@ -30,10 +18,14 @@ def calculate_cpp(
     taxes_and_fees: float = 0.0,
 ) -> float:
     """
-    Calculate cents per point.
+    Calculate cents per point for a flight or hotel redemption.
 
     Formula:
         CPP = ((cash price - award taxes/fees) / points required) * 100
+
+    Example:
+        $4,000 flight, 80,000 miles, $200 taxes/fees
+        (($4,000 - $200) / 80,000) * 100 = 4.75 cpp
     """
     if cash_price < 0:
         raise ValueError("cash_price cannot be negative")
@@ -44,69 +36,55 @@ def calculate_cpp(
     if taxes_and_fees < 0:
         raise ValueError("taxes_and_fees cannot be negative")
 
-    net_redemption_value = max(cash_price - taxes_and_fees, 0)
-    return round((net_redemption_value / points_required) * 100, 2)
+    net_value = max(cash_price - taxes_and_fees, 0)
+    return round((net_value / points_required) * 100, 2)
 
 
 def classify_cpp(cpp: float) -> str:
     """
-    General travel-rewards value tiers.
-    Adjust these thresholds for your own valuation model if needed.
+    Classify redemption quality using general travel-rewards thresholds.
+    You can adjust these thresholds based on your own valuation model.
     """
     if cpp >= 5.0:
-        return "Exceptional"
+        return "Exceptional value"
     if cpp >= 3.0:
-        return "Strong"
+        return "Strong value"
     if cpp >= 1.5:
-        return "Good"
+        return "Good value"
     if cpp >= 1.0:
-        return "Modest"
-    return "Poor"
+        return "Modest value"
+    return "Poor value"
 
 
-def evaluate_redemptions(options: List[RedemptionOption]) -> List[EvaluatedRedemption]:
-    """Evaluate and rank redemption options by CPP value"""
-    evaluated = []
+def evaluate_redemption(
+    redemption_type: str,
+    cash_price: float,
+    points_required: int,
+    taxes_and_fees: float = 0.0,
+) -> RedemptionValue:
+    cpp = calculate_cpp(
+        cash_price=cash_price,
+        points_required=points_required,
+        taxes_and_fees=taxes_and_fees,
+    )
 
-    for option in options:
-        cpp = calculate_cpp(
-            cash_price=option.cash_price,
-            points_required=option.points_required,
-            taxes_and_fees=option.taxes_and_fees,
-        )
-
-        evaluated.append(
-            EvaluatedRedemption(
-                name=option.name,
-                redemption_type=option.redemption_type,
-                cash_price=option.cash_price,
-                points_required=option.points_required,
-                taxes_and_fees=option.taxes_and_fees,
-                cpp=cpp,
-                value_tier=classify_cpp(cpp),
-                notes=option.notes,
-            )
-        )
-
-    return sorted(evaluated, key=lambda item: item.cpp, reverse=True)
+    return RedemptionValue(
+        redemption_type=redemption_type,
+        cash_price=cash_price,
+        points_required=points_required,
+        taxes_and_fees=taxes_and_fees,
+        cpp=cpp,
+        value_tier=classify_cpp(cpp),
+    )
 
 
-def find_best_redemption(evaluated: List[EvaluatedRedemption]) -> Optional[EvaluatedRedemption]:
-    """Find the redemption option with the highest CPP value"""
-    if not evaluated:
-        return None
-    return max(evaluated, key=lambda item: item.cpp)
-
-
-def redemption_to_dict(redemption: EvaluatedRedemption) -> dict:
-    """Convert EvaluatedRedemption to dictionary for JSON response"""
+def redemption_to_dict(redemption: RedemptionValue) -> dict:
+    """Convert RedemptionValue to dictionary for JSON response"""
     return {
-        "name": redemption.name,
         "type": redemption.redemption_type,
         "cash_price": redemption.cash_price,
         "points_required": redemption.points_required,
         "taxes_and_fees": redemption.taxes_and_fees,
         "cpp": redemption.cpp,
         "value_tier": redemption.value_tier,
-        "notes": redemption.notes,
     }
