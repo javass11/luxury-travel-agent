@@ -1,4 +1,5 @@
 import os
+import logging
 from flask import Flask, jsonify, request
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
@@ -9,8 +10,14 @@ from .database import LuxuryTravelDB
 from .flights import FlightSearchEngine
 from .hotels import HotelSearchEngine
 from .agent import LuxuryTravelAssistant
+from .api_clients.amadeus import AmadeusFlightAPI
+from .api_clients.hotels import HotelSearchAPI
+from .cache import cache
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_url_path="/static", static_folder="static")
 app.config.from_object(Config)
@@ -29,6 +36,10 @@ jwt = JWTManager(app)
 
 # Register blueprints
 app.register_blueprint(auth_bp)
+
+# Initialize API clients
+amadeus_api = AmadeusFlightAPI()
+hotels_api = HotelSearchAPI()
 
 # Initialize legacy database and engines for demo
 try:
@@ -67,17 +78,13 @@ def health():
 
 @app.route("/api/deals/analyze", methods=["POST"])
 def analyze_deals():
-    """Analyze flight and hotel deals (demo uses legacy database)"""
-    if not legacy_db:
-        return jsonify({"error": "Database not available"}), 503
-
+    """Analyze flight and hotel deals using real APIs"""
     data = request.json
 
     origin = data.get("origin", "").upper()
     destination = data.get("destination", "").upper()
     departure_date = data.get("departure_date")
-
-    cabin_class = data.get("cabin_class", "Economy")
+    cabin_class = data.get("cabin_class", "ECONOMY")
 
     hotel_destination = data.get("hotel_destination", destination)
     checkin = data.get("checkin", departure_date)
@@ -86,8 +93,20 @@ def analyze_deals():
     if not all([origin, destination, departure_date, checkin, checkout]):
         return jsonify({"error": "Missing required fields"}), 400
 
-    flights = flight_engine.search_flights(origin, destination, departure_date, cabin_class)
-    hotels = hotel_engine.search_hotels(hotel_destination, checkin, checkout)
+    # Search flights
+    flights = amadeus_api.search_flights(
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        cabin_class=cabin_class
+    )
+
+    # Search hotels
+    hotels = hotels_api.search_hotels(
+        destination=hotel_destination,
+        checkin_date=checkin,
+        checkout_date=checkout
+    )
 
     return jsonify({
         "flights": flights[:10],
@@ -97,34 +116,58 @@ def analyze_deals():
             "hotel_count": len(hotels),
             "best_flight_cpp": flights[0]["cpp"] if flights else None,
             "best_hotel_cpp": hotels[0]["cpp"] if hotels else None,
+            "flight_source": next((f.get('source', 'unknown') for f in flights), 'unknown'),
+            "hotel_source": next((h.get('source', 'unknown') for h in hotels), 'unknown'),
         },
-    })
+    }), 200
 
 
 @app.route("/api/flights/search", methods=["GET"])
 def search_flights():
-    """Search flights (demo uses legacy database)"""
-    if not legacy_db:
-        return jsonify({"error": "Database not available"}), 503
-
+    """Search flights from Amadeus API with caching"""
     origin = request.args.get("origin", "").upper()
     destination = request.args.get("destination", "").upper()
     departure_date = request.args.get("departure_date")
-    cabin_class = request.args.get("cabin_class")
+    cabin_class = request.args.get("cabin_class", "ECONOMY")
 
     if not all([origin, destination, departure_date]):
         return jsonify({"error": "Missing required parameters"}), 400
 
-    flights = flight_engine.search_flights(origin, destination, departure_date, cabin_class)
-    return jsonify({"flights": flights})
+    # Check cache first
+    cache_key = f"flights:{origin}:{destination}:{departure_date}:{cabin_class}"
+    cached_flights = cache.get(cache_key)
+    if cached_flights:
+        return jsonify({
+            "flights": cached_flights,
+            "source": "cache",
+            "message": "Results from cache (valid for 1 hour)"
+        }), 200
+
+    # Fetch from API
+    flights = amadeus_api.search_flights(
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        cabin_class=cabin_class
+    )
+
+    # Cache results for 1 hour
+    if flights:
+        cache.set(cache_key, flights, ttl=3600)
+        source = next((f.get('source', 'unknown') for f in flights), 'unknown')
+    else:
+        source = 'no_results'
+
+    return jsonify({
+        "flights": flights,
+        "source": source,
+        "count": len(flights)
+    }), 200
 
 
 @app.route("/api/hotels/search", methods=["GET"])
 def search_hotels():
-    """Search hotels (demo uses legacy database)"""
-    if not legacy_db:
-        return jsonify({"error": "Database not available"}), 503
-
+    """Search hotels from Hotel API with caching"""
     destination = request.args.get("destination")
     checkin_date = request.args.get("checkin_date")
     checkout_date = request.args.get("checkout_date")
@@ -133,8 +176,34 @@ def search_hotels():
     if not all([destination, checkin_date, checkout_date]):
         return jsonify({"error": "Missing required parameters"}), 400
 
-    hotels = hotel_engine.search_hotels(destination, checkin_date, checkout_date, loyalty_program)
-    return jsonify({"hotels": hotels})
+    # Check cache first
+    cache_key = f"hotels:{destination}:{checkin_date}:{checkout_date}"
+    cached_hotels = cache.get(cache_key)
+    if cached_hotels:
+        hotels = cached_hotels
+        source = "cache"
+    else:
+        # Fetch from API
+        hotels = hotels_api.search_hotels(
+            destination=destination,
+            checkin_date=checkin_date,
+            checkout_date=checkout_date
+        )
+        source = next((h.get('source', 'unknown') for h in hotels), 'unknown')
+
+        # Cache results for 1 hour
+        if hotels:
+            cache.set(cache_key, hotels, ttl=3600)
+
+    # Filter by loyalty program if provided
+    if loyalty_program and hotels:
+        hotels = [h for h in hotels if loyalty_program.lower() in h.get("loyalty_program", "").lower()]
+
+    return jsonify({
+        "hotels": hotels,
+        "source": source,
+        "count": len(hotels)
+    }), 200
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -185,6 +254,36 @@ def save_deal():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cache/stats", methods=["GET"])
+@jwt_required()
+def cache_stats():
+    """Get cache statistics (protected)"""
+    stats = cache.get_stats()
+    return jsonify({
+        "cache": stats,
+        "amadeus_api": {
+            "enabled": amadeus_api.enabled,
+            "status": "configured" if amadeus_api.enabled else "demo_mode"
+        },
+        "hotels_api": {
+            "enabled": hotels_api.enabled,
+            "status": "configured" if hotels_api.enabled else "demo_mode"
+        }
+    }), 200
+
+
+@app.route("/api/cache/flush", methods=["POST"])
+@jwt_required()
+def flush_cache():
+    """Flush cache (protected)"""
+    pattern = request.json.get("pattern", "*") if request.json else "*"
+    success = cache.flush_pattern(pattern)
+    return jsonify({
+        "status": "flushed" if success else "error",
+        "pattern": pattern
+    }), 200 if success else 500
 
 
 @app.errorhandler(404)
