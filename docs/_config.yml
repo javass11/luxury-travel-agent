@@ -1,0 +1,10 @@
+title: Luxury Travel Agent
+description: Production-ready travel platform with API integration
+url: https://javass11.github.io/luxury-travel-agent
+baseurl: /luxury-travel-agent
+theme: jekyll-theme-minimal
+show_downloads: true
+google_analytics:
+github:
+  is_project_page: true
+  repository_url: https://github.com/javass11/luxury-travel-agent
