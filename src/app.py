@@ -15,6 +15,7 @@ from .api_clients.hotels import HotelSearchAPI
 from .cache import cache
 from .redemption import evaluate_redemption, redemption_to_dict
 from .visualization import visualize_cpp_bar_chart, TravelRedemptionOption
+from .api_clients.seats_aero import SeatsAeroAPI
 
 load_dotenv()
 
@@ -42,6 +43,7 @@ app.register_blueprint(auth_bp)
 # Initialize API clients
 amadeus_api = AmadeusFlightAPI()
 hotels_api = HotelSearchAPI()
+seats_aero_api = SeatsAeroAPI()
 
 # Initialize legacy database and engines for demo
 try:
@@ -375,6 +377,44 @@ def visualize_redemptions():
 
     except Exception as e:
         return jsonify({"error": f"Visualization failed: {str(e)}"}), 500
+
+
+@app.route("/api/awards/search", methods=["GET"])
+def search_awards():
+    """Search award flight availability via Seats.aero"""
+    origin = request.args.get("origin", "").upper()
+    destination = request.args.get("destination", "").upper()
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+    cabin = request.args.get("cabin", "business").lower()
+    program = request.args.get("program")
+    max_results = int(request.args.get("max_results", 25))
+
+    if not all([origin, destination, start_date]):
+        return jsonify({"error": "Missing required parameters: origin, destination, start_date"}), 400
+
+    try:
+        awards = seats_aero_api.search_awards(
+            origin=origin,
+            destination=destination,
+            start_date=start_date,
+            end_date=end_date,
+            cabin=cabin,
+            program=program,
+            max_results=max_results,
+        )
+
+        return jsonify({
+            "awards": awards,
+            "source": "seats_aero",
+            "count": len(awards),
+            "origin": origin,
+            "destination": destination,
+            "cabin": cabin,
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Award search failed: {str(e)}"}), 500
 
 
 @app.errorhandler(404)
