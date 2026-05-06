@@ -5,15 +5,25 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.app import app
+from src.app import app, db
 
 
 class TestFlaskIntegration(unittest.TestCase):
     """Integration tests for Flask API"""
 
     def setUp(self):
+        app.config['TESTING'] = True
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         self.client = app.test_client()
         self.client.testing = True
+
+        with app.app_context():
+            db.create_all()
+
+    def tearDown(self):
+        with app.app_context():
+            db.session.remove()
+            db.drop_all()
 
     def test_index_page_loads(self):
         """Test that the index page loads successfully"""
@@ -101,9 +111,19 @@ class TestFlaskIntegration(unittest.TestCase):
         self.assertIn("error", data)
 
     def test_save_deal_success(self):
-        """Test saving a deal"""
+        """Test saving a deal (requires authentication)"""
+        # First register a user to get token
+        register_response = self.client.post(
+            '/api/auth/register',
+            data=json.dumps({
+                'email': 'test@example.com',
+                'password': 'TestPassword123',
+            }),
+            content_type='application/json',
+        )
+        token = json.loads(register_response.data)['access_token']
+
         payload = {
-            "user_id": "user123",
             "deal_type": "flight",
             "deal_id": "FL001",
             "notes": "Great deal",
@@ -112,41 +132,67 @@ class TestFlaskIntegration(unittest.TestCase):
             "/api/deals/save",
             data=json.dumps(payload),
             content_type="application/json",
+            headers={'Authorization': f'Bearer {token}'},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 201)
         data = json.loads(response.data)
         self.assertIn("saved_id", data)
 
     def test_save_deal_missing_fields(self):
         """Test saving a deal with missing fields"""
-        payload = {"user_id": "user123"}  # Missing required fields
+        # First register a user to get token
+        register_response = self.client.post(
+            '/api/auth/register',
+            data=json.dumps({
+                'email': 'test@example.com',
+                'password': 'TestPassword123',
+            }),
+            content_type='application/json',
+        )
+        token = json.loads(register_response.data)['access_token']
+
+        payload = {}  # Missing required fields
         response = self.client.post(
             "/api/deals/save",
             data=json.dumps(payload),
             content_type="application/json",
+            headers={'Authorization': f'Bearer {token}'},
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
         self.assertIn("error", data)
 
-    def test_chat_endpoint_no_api_key(self):
-        """Test chat endpoint without API key configured"""
+    def test_chat_endpoint_requires_auth(self):
+        """Test chat endpoint requires authentication"""
         payload = {"message": "What flights do you recommend?"}
         response = self.client.post(
             "/api/chat",
             data=json.dumps(payload),
             content_type="application/json",
         )
-        # Should return 200 with error message in response
-        self.assertIn(response.status_code, [200, 500])
+        # Should require authentication
+        self.assertEqual(response.status_code, 401)
 
-    def test_chat_missing_message(self):
-        """Test chat endpoint without message"""
+    def test_chat_missing_message_with_auth(self):
+        """Test chat endpoint without message but with auth"""
+        # First register a user to get token
+        register_response = self.client.post(
+            '/api/auth/register',
+            data=json.dumps({
+                'email': 'test@example.com',
+                'password': 'TestPassword123',
+            }),
+            content_type='application/json',
+        )
+        token = json.loads(register_response.data)['access_token']
+
+        # Try to chat without message
         payload = {}
         response = self.client.post(
             "/api/chat",
             data=json.dumps(payload),
             content_type="application/json",
+            headers={'Authorization': f'Bearer {token}'},
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)

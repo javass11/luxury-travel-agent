@@ -1,5 +1,4 @@
 from typing import List, Dict, Optional
-from .models import FlightDeal
 from .database import LuxuryTravelDB
 
 

@@ -1,7 +1,6 @@
 import sqlite3
 from typing import List, Dict, Optional
 from datetime import datetime
-from .models import FlightDeal, HotelDeal, LoyaltyProfile, SavedDeal
 
 
 class LuxuryTravelDB:
