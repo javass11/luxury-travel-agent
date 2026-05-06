@@ -14,6 +14,7 @@ from .api_clients.amadeus import AmadeusFlightAPI
 from .api_clients.hotels import HotelSearchAPI
 from .cache import cache
 from .redemption import evaluate_redemption, redemption_to_dict
+from .visualization import visualize_cpp_bar_chart, TravelRedemptionOption
 
 load_dotenv()
 
@@ -329,6 +330,51 @@ def flush_cache():
         "status": "flushed" if success else "error",
         "pattern": pattern
     }), 200 if success else 500
+
+
+@app.route("/api/redemptions/visualize", methods=["POST"])
+def visualize_redemptions():
+    """Generate CPP comparison chart for redemption options"""
+    data = request.json
+    options_data = data.get("options", [])
+
+    if not options_data:
+        return jsonify({"error": "No redemption options provided"}), 400
+
+    try:
+        options = []
+        for opt in options_data:
+            option = TravelRedemptionOption(
+                program_or_airline=opt.get("program_or_airline", opt.get("redemption_type", "Unknown")),
+                flight_number=opt.get("flight_number", ""),
+                origin=opt.get("origin", ""),
+                destination=opt.get("destination", ""),
+                cabin=opt.get("cabin", "Economy"),
+                cash_price_usd=float(opt.get("cash_price", 0)) if opt.get("cash_price") else None,
+                miles_required=int(opt.get("miles_required", opt.get("points_required", 0))) if opt.get("miles_required") or opt.get("points_required") else None,
+                taxes_usd=float(opt.get("taxes_usd", opt.get("taxes_and_fees", 0))) if opt.get("taxes_usd") or opt.get("taxes_and_fees") else None,
+                cpp=float(opt.get("cpp")) if opt.get("cpp") else None,
+            )
+            options.append(option)
+
+        chart_image = visualize_cpp_bar_chart(
+            options,
+            title=data.get("title", "Cents Per Point Redemption Value"),
+            return_base64=True
+        )
+
+        if not chart_image:
+            return jsonify({"error": "No cpp values to visualize"}), 400
+
+        return jsonify({
+            "chart": chart_image,
+            "chart_type": "png_base64",
+            "count": len(options),
+            "message": "Chart generated successfully"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Visualization failed: {str(e)}"}), 500
 
 
 @app.errorhandler(404)
