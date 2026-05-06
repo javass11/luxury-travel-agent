@@ -13,6 +13,7 @@ from .agent import LuxuryTravelAssistant
 from .api_clients.amadeus import AmadeusFlightAPI
 from .api_clients.hotels import HotelSearchAPI
 from .cache import cache
+from .redemption import RedemptionOption, evaluate_redemptions, find_best_redemption, redemption_to_dict
 
 load_dotenv()
 
@@ -254,6 +255,47 @@ def save_deal():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/redemptions/evaluate", methods=["POST"])
+def evaluate_redemptions_endpoint():
+    """Evaluate and compare redemption options by CPP value (points per cent)"""
+    data = request.json
+    options_data = data.get("options", [])
+
+    if not options_data:
+        return jsonify({"error": "No redemption options provided"}), 400
+
+    try:
+        # Convert to RedemptionOption objects
+        options = [
+            RedemptionOption(
+                name=opt.get("name"),
+                redemption_type=opt.get("redemption_type"),
+                cash_price=float(opt.get("cash_price", 0)),
+                points_required=int(opt.get("points_required", 0)),
+                taxes_and_fees=float(opt.get("taxes_and_fees", 0)),
+                notes=opt.get("notes")
+            )
+            for opt in options_data
+        ]
+
+        # Evaluate redemptions
+        evaluated = evaluate_redemptions(options)
+
+        # Find best
+        best = find_best_redemption(evaluated)
+
+        return jsonify({
+            "redemptions": [redemption_to_dict(r) for r in evaluated],
+            "best_redemption": redemption_to_dict(best) if best else None,
+            "count": len(evaluated)
+        }), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Evaluation failed: {str(e)}"}), 500
 
 
 @app.route("/api/cache/stats", methods=["GET"])
