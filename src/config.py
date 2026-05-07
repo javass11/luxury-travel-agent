@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -6,7 +7,14 @@ load_dotenv()
 
 class Config:
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev-key-change-in-production")
+
+    # In production, SECRET_KEY MUST be set
+    SECRET_KEY = os.getenv("SECRET_KEY")
+    if not SECRET_KEY and not DEBUG:
+        print("ERROR: SECRET_KEY environment variable is required in production mode")
+        sys.exit(1)
+    if not SECRET_KEY:
+        SECRET_KEY = "dev-secret-key-change-in-production"
 
     AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
     AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")

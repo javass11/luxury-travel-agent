@@ -18,6 +18,7 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
 
     # Relationships
     loyalty_profile = db.relationship('LoyaltyProfile', backref='user', uselist=False, cascade='all, delete-orphan')
@@ -194,11 +195,12 @@ class PriceHistory(db.Model):
 class LoyaltyAccount(db.Model):
     """Linked frequent flyer accounts"""
     __tablename__ = 'loyalty_accounts'
+    __table_args__ = (db.UniqueConstraint('user_id', 'program_name', name='unique_user_program'),)
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
     program_name = db.Column(db.String(50), nullable=False)
-    frequent_flyer_number = db.Column(db.String(50), nullable=False)
+    _frequent_flyer_number = db.Column('frequent_flyer_number', db.String(500), nullable=False)
     miles_balance = db.Column(db.Integer, default=0)
     elite_status = db.Column(db.String(50))
     elite_expiration = db.Column(db.Date)
@@ -208,6 +210,23 @@ class LoyaltyAccount(db.Model):
     last_synced = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def frequent_flyer_number(self):
+        """Decrypt frequent flyer number on retrieval"""
+        if not self._frequent_flyer_number:
+            return None
+        from .encryption import field_encryption
+        return field_encryption.decrypt(self._frequent_flyer_number)
+
+    @frequent_flyer_number.setter
+    def frequent_flyer_number(self, value):
+        """Encrypt frequent flyer number on assignment"""
+        if not value:
+            self._frequent_flyer_number = None
+        else:
+            from .encryption import field_encryption
+            self._frequent_flyer_number = field_encryption.encrypt(value)
 
     def to_dict(self):
         return {
@@ -264,7 +283,7 @@ class AlertHistory(db.Model):
     __tablename__ = 'alert_history'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    alert_id = db.Column(db.String(36), db.ForeignKey('alerts.id'), nullable=False)
+    alert_id = db.Column(db.String(36), db.ForeignKey('alerts.id', ondelete='CASCADE'), nullable=False)
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
     deal_price = db.Column(db.Float)
     deal_miles = db.Column(db.Integer)
@@ -389,3 +408,14 @@ class SearchLog(db.Model):
             'source': self.source,
             'created_at': self.created_at.isoformat(),
         }
+
+
+class PasswordReset(db.Model):
+    """Password reset tokens"""
+    __tablename__ = 'password_resets'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False, index=True)
+    token = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

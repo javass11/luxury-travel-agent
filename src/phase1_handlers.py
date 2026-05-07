@@ -29,6 +29,14 @@ class PreferencesHandler:
     @staticmethod
     def update_user_preferences(user_id: str, data: dict):
         """Update user preferences"""
+        # Whitelist of allowed preference fields
+        allowed_fields = {
+            'home_airport', 'work_airport', 'preferred_airlines',
+            'excluded_airlines', 'preferred_cabins', 'max_stops',
+            'preferred_alliances', 'preferred_departure_time',
+            'preferred_arrival_time'
+        }
+
         prefs = UserPreferences.query.filter_by(user_id=user_id).first()
 
         if not prefs:
@@ -36,8 +44,10 @@ class PreferencesHandler:
             db.session.add(prefs)
 
         for key, value in data.items():
-            if hasattr(prefs, key):
+            if key in allowed_fields and hasattr(prefs, key):
                 setattr(prefs, key, value)
+            elif key not in allowed_fields:
+                logger.warning(f"Attempted to set disallowed preference field: {key}")
 
         prefs.updated_at = datetime.utcnow()
         db.session.commit()
@@ -231,6 +241,16 @@ class AlertHandler:
                     threshold_price: float = None, threshold_miles: int = None,
                     cabin: str = None) -> dict:
         """Create a price or award alert"""
+        # Validate price threshold
+        if threshold_price is not None:
+            if threshold_price < 10 or threshold_price > 10000:
+                raise ValueError("Price threshold must be between $10 and $10,000")
+
+        # Validate miles threshold
+        if threshold_miles is not None:
+            if threshold_miles < 1000 or threshold_miles > 500000:
+                raise ValueError("Miles threshold must be between 1,000 and 500,000")
+
         alert = Alert(
             user_id=user_id,
             alert_type=alert_type,

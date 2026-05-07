@@ -2,6 +2,8 @@ import os
 import logging
 from flask import Flask, jsonify, request
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
+from flask_cors import CORS
+from flask_talisman import Talisman
 from dotenv import load_dotenv
 from .models import db, User, SearchLog, Alert
 from .auth import auth_bp
@@ -33,13 +35,42 @@ app.config.from_object(Config)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///luxury_travel.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Configure JWT
-app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600 * 24
+# Configure JWT (15 minute access token expiration)
+app.config['JWT_SECRET_KEY'] = Config.SECRET_KEY
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 900  # 15 minutes
 
 # Initialize extensions
 db.init_app(app)
 jwt = JWTManager(app)
+
+# Configure CORS with restricted origin
+cors_origins = os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:5000').split(',')
+cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
+CORS(app, resources={
+    r"/api/*": {
+        "origins": cors_origins,
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "max_age": 3600,
+        "send_wildcard": False,
+        "supports_credentials": True
+    }
+})
+
+# Configure security headers with Talisman (disable HTTPS redirect in dev)
+Talisman(app,
+    force_https=not Config.DEBUG,
+    strict_transport_security=not Config.DEBUG,
+    strict_transport_security_max_age=31536000 if not Config.DEBUG else None,
+    content_security_policy={
+        'default-src': "'self'",
+        'script-src': "'self' 'unsafe-inline'",
+        'style-src': "'self' 'unsafe-inline'",
+        'img-src': "'self' data: https:",
+    }
+)
+
+# Rate limiting is implemented per-endpoint (e.g., login endpoint in auth.py uses custom rate limiting)
 
 # Register blueprints
 app.register_blueprint(auth_bp)
@@ -770,8 +801,8 @@ def get_analytics_summary():
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
 
-    # Simple admin check (in production, use proper role-based access)
-    if not user or user.email not in ['admin@example.com', 'admin@luxurytravelagent.com']:
+    if not user or not user.is_admin:
+        logger.warning(f"Unauthorized admin access attempt by user: {user_id}")
         return jsonify({"error": "Admin access required"}), 403
 
     try:
@@ -781,6 +812,7 @@ def get_analytics_summary():
         total_users = db.session.query(func.count(User.id)).scalar() or 0
         total_alerts = db.session.query(func.count(Alert.id)).scalar() or 0
 
+        logger.info(f"Admin analytics accessed by: {user.email}")
         return jsonify({
             "total_searches": total_searches,
             "total_users": total_users,
@@ -788,7 +820,8 @@ def get_analytics_summary():
             "trending_routes": DealAnalyticsHandler.get_trending_routes(7, 5),
         }), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Admin analytics error: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.errorhandler(404)

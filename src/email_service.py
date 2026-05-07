@@ -54,8 +54,8 @@ class EmailService:
     def send_email(self, to_email: str, subject: str, body: str) -> bool:
         """Send email via SMTP"""
         if not self.enabled:
-            logger.info(f"Email disabled (demo mode): {to_email} - {subject}")
-            return True
+            logger.warning(f"Email not sent (disabled): {to_email} - {subject}")
+            return False
 
         try:
             import smtplib
