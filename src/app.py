@@ -17,6 +17,7 @@ from .redemption import evaluate_redemption, redemption_to_dict
 from .visualization import visualize_cpp_bar_chart, TravelRedemptionOption
 from .api_clients.seats_aero import SeatsAeroAPI
 from .travel_api_config import load_travel_api_config
+from .phase1_handlers import PreferencesHandler, PriceHistoryHandler, LoyaltyHandler, AlertHandler
 
 load_dotenv()
 
@@ -132,7 +133,7 @@ def analyze_deals():
 
 @app.route("/api/flights/search", methods=["GET"])
 def search_flights():
-    """Search flights from Amadeus API with caching"""
+    """Search flights from Amadeus API with caching and preference filtering"""
     origin = request.args.get("origin", "").upper()
     destination = request.args.get("destination", "").upper()
     departure_date = request.args.get("departure_date")
@@ -145,31 +146,51 @@ def search_flights():
     cache_key = f"flights:{origin}:{destination}:{departure_date}:{cabin_class}"
     cached_flights = cache.get(cache_key)
     if cached_flights:
-        return jsonify({
-            "flights": cached_flights,
-            "source": "cache",
-            "message": "Results from cache (valid for 1 hour)"
-        }), 200
-
-    # Fetch from API
-    flights = amadeus_api.search_flights(
-        origin=origin,
-        destination=destination,
-        departure_date=departure_date,
-        cabin_class=cabin_class
-    )
-
-    # Cache results for 1 hour
-    if flights:
-        cache.set(cache_key, flights, ttl=3600)
-        source = next((f.get('source', 'unknown') for f in flights), 'unknown')
+        flights = cached_flights
+        source = "cache"
     else:
-        source = 'no_results'
+        # Fetch from API
+        flights = amadeus_api.search_flights(
+            origin=origin,
+            destination=destination,
+            departure_date=departure_date,
+            cabin_class=cabin_class
+        )
+
+        # Cache results for 1 hour
+        if flights:
+            cache.set(cache_key, flights, ttl=3600)
+            source = next((f.get('source', 'unknown') for f in flights), 'unknown')
+        else:
+            source = 'no_results'
+
+    # Record prices to history
+    for flight in flights:
+        PriceHistoryHandler.record_price(
+            origin, destination, cabin_class,
+            {'cash_price': flight.get('cash_price'), 'miles_cost': flight.get('miles_cost'), 'cpp': flight.get('cpp')},
+            source
+        )
+
+    # Apply user preferences if authenticated
+    user_id = None
+    try:
+        user_id = get_jwt_identity()
+    except:
+        pass
+
+    if user_id:
+        flights = PreferencesHandler.filter_flights_by_preferences(flights, user_id)
+
+    # Check alerts
+    search_results = {'origin': origin, 'destination': destination, 'flights': flights}
+    AlertHandler.check_all_alerts(search_results)
 
     return jsonify({
         "flights": flights,
         "source": source,
-        "count": len(flights)
+        "count": len(flights),
+        "preferences_applied": bool(user_id)
     }), 200
 
 
@@ -419,6 +440,206 @@ def search_awards():
 
     except Exception as e:
         return jsonify({"error": f"Award search failed: {str(e)}"}), 500
+
+
+# ============================================================================
+# PHASE 1: User Preferences, Price History, Loyalty, Alerts
+# ============================================================================
+
+@app.route("/api/user/preferences", methods=["GET"])
+@jwt_required()
+def get_preferences():
+    """Get user's travel preferences"""
+    user_id = get_jwt_identity()
+    try:
+        prefs = PreferencesHandler.get_user_preferences(user_id)
+        return jsonify(prefs), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/user/preferences", methods=["POST"])
+@jwt_required()
+def update_preferences():
+    """Update user's travel preferences"""
+    user_id = get_jwt_identity()
+    data = request.json
+
+    try:
+        prefs = PreferencesHandler.update_user_preferences(user_id, data)
+        return jsonify(prefs), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/analytics/price-history", methods=["GET"])
+def get_price_history():
+    """Get historical prices for a route"""
+    origin = request.args.get("origin", "").upper()
+    destination = request.args.get("destination", "").upper()
+    cabin = request.args.get("cabin")
+    days = int(request.args.get("days", 30))
+
+    if not all([origin, destination]):
+        return jsonify({"error": "Missing origin or destination"}), 400
+
+    try:
+        history = PriceHistoryHandler.get_price_history(origin, destination, cabin, days)
+        return jsonify({
+            "history": history,
+            "count": len(history),
+            "origin": origin,
+            "destination": destination,
+            "days": days
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analytics/price-trends", methods=["GET"])
+def get_price_trends():
+    """Get price trends and analytics for a route"""
+    origin = request.args.get("origin", "").upper()
+    destination = request.args.get("destination", "").upper()
+    cabin = request.args.get("cabin")
+    days = int(request.args.get("days", 30))
+
+    if not all([origin, destination]):
+        return jsonify({"error": "Missing origin or destination"}), 400
+
+    try:
+        analytics = PriceHistoryHandler.get_price_analytics(origin, destination, cabin, days)
+
+        if not analytics:
+            return jsonify({"error": "No price history available"}), 404
+
+        return jsonify(analytics), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/loyalty/accounts", methods=["GET"])
+@jwt_required()
+def get_loyalty_accounts():
+    """Get user's linked loyalty accounts"""
+    user_id = get_jwt_identity()
+
+    try:
+        accounts = LoyaltyHandler.get_user_loyalty_accounts(user_id)
+        return jsonify({
+            "accounts": accounts,
+            "count": len(accounts)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/loyalty/link", methods=["POST"])
+@jwt_required()
+def link_loyalty_account():
+    """Link a frequent flyer account"""
+    user_id = get_jwt_identity()
+    data = request.json
+
+    program = data.get("program")
+    ff_number = data.get("frequent_flyer_number")
+
+    if not all([program, ff_number]):
+        return jsonify({"error": "Missing program or frequent flyer number"}), 400
+
+    try:
+        account = LoyaltyHandler.link_loyalty_account(user_id, program, ff_number)
+        return jsonify(account), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/loyalty/accounts/<account_id>", methods=["DELETE"])
+@jwt_required()
+def unlink_loyalty_account(account_id):
+    """Unlink a loyalty account"""
+    user_id = get_jwt_identity()
+
+    try:
+        LoyaltyHandler.delete_loyalty_account(user_id, account_id)
+        return jsonify({"message": "Account unlinked"}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/alerts", methods=["GET"])
+@jwt_required()
+def get_alerts():
+    """Get user's alerts"""
+    user_id = get_jwt_identity()
+
+    try:
+        alerts = AlertHandler.get_user_alerts(user_id)
+        return jsonify({
+            "alerts": alerts,
+            "count": len(alerts)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/alerts", methods=["POST"])
+@jwt_required()
+def create_alert():
+    """Create a price or award alert"""
+    user_id = get_jwt_identity()
+    data = request.json
+
+    alert_type = data.get("alert_type")
+    origin = data.get("origin", "").upper()
+    destination = data.get("destination", "").upper()
+    threshold_price = data.get("threshold_price")
+    threshold_miles = data.get("threshold_miles")
+    cabin = data.get("cabin")
+
+    if not all([alert_type, origin, destination]):
+        return jsonify({"error": "Missing alert_type, origin, or destination"}), 400
+
+    try:
+        alert = AlertHandler.create_alert(
+            user_id, alert_type, origin, destination,
+            threshold_price, threshold_miles, cabin
+        )
+        return jsonify(alert), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/alerts/<alert_id>", methods=["DELETE"])
+@jwt_required()
+def delete_alert(alert_id):
+    """Delete an alert"""
+    user_id = get_jwt_identity()
+
+    try:
+        AlertHandler.delete_alert(user_id, alert_id)
+        return jsonify({"message": "Alert deleted"}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/alerts/<alert_id>/deactivate", methods=["POST"])
+@jwt_required()
+def deactivate_alert(alert_id):
+    """Deactivate an alert"""
+    user_id = get_jwt_identity()
+
+    try:
+        AlertHandler.deactivate_alert(user_id, alert_id)
+        return jsonify({"message": "Alert deactivated"}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.errorhandler(404)

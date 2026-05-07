@@ -120,3 +120,163 @@ class ChatMessage(db.Model):
 
     def __repr__(self):
         return f'<ChatMessage user_id={self.user_id}>'
+
+
+class UserPreferences(db.Model):
+    """User travel preferences for personalization"""
+    __tablename__ = 'user_preferences'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False, unique=True)
+
+    home_airport = db.Column(db.String(3))
+    work_airport = db.Column(db.String(3))
+    preferred_airlines = db.Column(db.JSON, default=list)
+    excluded_airlines = db.Column(db.JSON, default=list)
+    preferred_cabins = db.Column(db.JSON, default=lambda: ['economy', 'business'])
+    max_stops = db.Column(db.Integer, default=2)
+    preferred_alliances = db.Column(db.JSON, default=list)
+    preferred_departure_time = db.Column(db.String(20))
+    preferred_arrival_time = db.Column(db.String(20))
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'home_airport': self.home_airport,
+            'work_airport': self.work_airport,
+            'preferred_airlines': self.preferred_airlines,
+            'excluded_airlines': self.excluded_airlines,
+            'preferred_cabins': self.preferred_cabins,
+            'max_stops': self.max_stops,
+            'preferred_alliances': self.preferred_alliances,
+            'preferred_departure_time': self.preferred_departure_time,
+            'preferred_arrival_time': self.preferred_arrival_time,
+        }
+
+
+class PriceHistory(db.Model):
+    """Historical price tracking for trend analysis"""
+    __tablename__ = 'price_history'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    route_key = db.Column(db.String(10), nullable=False, index=True)
+    origin = db.Column(db.String(3), nullable=False, index=True)
+    destination = db.Column(db.String(3), nullable=False, index=True)
+    cabin = db.Column(db.String(20), nullable=False)
+    search_date = db.Column(db.Date, nullable=False, index=True)
+    cash_price = db.Column(db.Float)
+    miles_cost = db.Column(db.Integer)
+    cpp = db.Column(db.Float)
+    source = db.Column(db.String(50))
+    currency = db.Column(db.String(3), default='USD')
+    recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'route_key': self.route_key,
+            'origin': self.origin,
+            'destination': self.destination,
+            'cabin': self.cabin,
+            'search_date': self.search_date.isoformat(),
+            'cash_price': self.cash_price,
+            'miles_cost': self.miles_cost,
+            'cpp': self.cpp,
+            'source': self.source,
+            'currency': self.currency,
+            'recorded_at': self.recorded_at.isoformat(),
+        }
+
+
+class LoyaltyAccount(db.Model):
+    """Linked frequent flyer accounts"""
+    __tablename__ = 'loyalty_accounts'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    program_name = db.Column(db.String(50), nullable=False)
+    frequent_flyer_number = db.Column(db.String(50), nullable=False)
+    miles_balance = db.Column(db.Integer, default=0)
+    elite_status = db.Column(db.String(50))
+    elite_expiration = db.Column(db.Date)
+    program_tier = db.Column(db.Integer)
+    is_verified = db.Column(db.Boolean, default=False)
+
+    last_synced = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'program_name': self.program_name,
+            'frequent_flyer_number': self.frequent_flyer_number,
+            'miles_balance': self.miles_balance,
+            'elite_status': self.elite_status,
+            'elite_expiration': self.elite_expiration.isoformat() if self.elite_expiration else None,
+            'program_tier': self.program_tier,
+            'is_verified': self.is_verified,
+            'last_synced': self.last_synced.isoformat() if self.last_synced else None,
+        }
+
+
+class Alert(db.Model):
+    """Price and availability alerts"""
+    __tablename__ = 'alerts'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    alert_type = db.Column(db.String(50), nullable=False)
+    origin = db.Column(db.String(3), nullable=False, index=True)
+    destination = db.Column(db.String(3), nullable=False, index=True)
+    cabin = db.Column(db.String(20))
+    threshold_price = db.Column(db.Float)
+    threshold_miles = db.Column(db.Integer)
+    is_active = db.Column(db.Boolean, default=True)
+    email_enabled = db.Column(db.Boolean, default=True)
+
+    last_triggered = db.Column(db.DateTime)
+    trigger_count = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'alert_type': self.alert_type,
+            'origin': self.origin,
+            'destination': self.destination,
+            'cabin': self.cabin,
+            'threshold_price': self.threshold_price,
+            'threshold_miles': self.threshold_miles,
+            'is_active': self.is_active,
+            'email_enabled': self.email_enabled,
+            'last_triggered': self.last_triggered.isoformat() if self.last_triggered else None,
+            'trigger_count': self.trigger_count,
+        }
+
+
+class AlertHistory(db.Model):
+    """Alert trigger history for tracking"""
+    __tablename__ = 'alert_history'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    alert_id = db.Column(db.String(36), db.ForeignKey('alerts.id'), nullable=False)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    deal_price = db.Column(db.Float)
+    deal_miles = db.Column(db.Integer)
+    triggered_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    notification_sent = db.Column(db.Boolean, default=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'alert_id': self.alert_id,
+            'deal_price': self.deal_price,
+            'deal_miles': self.deal_miles,
+            'triggered_at': self.triggered_at.isoformat(),
+            'notification_sent': self.notification_sent,
+        }
