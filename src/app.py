@@ -3,7 +3,7 @@ import logging
 from flask import Flask, jsonify, request
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
-from .models import db, User
+from .models import db, User, SearchLog, Alert
 from .auth import auth_bp
 from .config import Config
 from .database import LuxuryTravelDB
@@ -18,6 +18,8 @@ from .visualization import visualize_cpp_bar_chart, TravelRedemptionOption
 from .api_clients.seats_aero import SeatsAeroAPI
 from .travel_api_config import load_travel_api_config
 from .phase1_handlers import PreferencesHandler, PriceHistoryHandler, LoyaltyHandler, AlertHandler
+from .advanced_filters import FlightFilter, HotelFilter, AwardFilter
+from .analytics_handlers import DealAnalyticsHandler, UserAnalyticsHandler
 
 load_dotenv()
 
@@ -133,7 +135,10 @@ def analyze_deals():
 
 @app.route("/api/flights/search", methods=["GET"])
 def search_flights():
-    """Search flights from Amadeus API with caching and preference filtering"""
+    """Search flights with advanced filtering, preferences, and analytics"""
+    import time
+    start_time = time.time()
+
     origin = request.args.get("origin", "").upper()
     destination = request.args.get("destination", "").upper()
     departure_date = request.args.get("departure_date")
@@ -142,7 +147,28 @@ def search_flights():
     if not all([origin, destination, departure_date]):
         return jsonify({"error": "Missing required parameters"}), 400
 
-    # Check cache first
+    user_id = None
+    try:
+        user_id = get_jwt_identity()
+    except:
+        pass
+
+    # Build advanced filters from query params
+    filters = {
+        'cabin_class': cabin_class,
+        'max_stops': request.args.get("max_stops", type=int),
+        'max_price': request.args.get("max_price", type=float),
+        'min_price': request.args.get("min_price", type=float),
+        'direct_only': request.args.get("direct_only", type=bool),
+        'exclude_airlines': request.args.getlist("exclude_airlines"),
+        'include_airlines': request.args.getlist("include_airlines"),
+        'preferred_departure_time': request.args.get("preferred_departure_time"),
+    }
+
+    # Remove None values
+    filters = {k: v for k, v in filters.items() if v is not None}
+
+    # Check cache
     cache_key = f"flights:{origin}:{destination}:{departure_date}:{cabin_class}"
     cached_flights = cache.get(cache_key)
     if cached_flights:
@@ -157,7 +183,7 @@ def search_flights():
             cabin_class=cabin_class
         )
 
-        # Cache results for 1 hour
+        # Cache results
         if flights:
             cache.set(cache_key, flights, ttl=3600)
             source = next((f.get('source', 'unknown') for f in flights), 'unknown')
@@ -165,22 +191,32 @@ def search_flights():
             source = 'no_results'
 
     # Record prices to history
+    prices = []
     for flight in flights:
+        price = flight.get('cash_price')
+        if price:
+            prices.append(price)
         PriceHistoryHandler.record_price(
             origin, destination, cabin_class,
             {'cash_price': flight.get('cash_price'), 'miles_cost': flight.get('miles_cost'), 'cpp': flight.get('cpp')},
             source
         )
 
-    # Apply user preferences if authenticated
-    user_id = None
-    try:
-        user_id = get_jwt_identity()
-    except:
-        pass
-
+    # Apply user preferences
     if user_id:
         flights = PreferencesHandler.filter_flights_by_preferences(flights, user_id)
+
+    # Apply advanced filters
+    flights = FlightFilter.apply_filters(flights, filters)
+
+    # Update deal analytics
+    best_cpp = max([f.get('cpp', 0) for f in flights]) if flights else None
+    DealAnalyticsHandler.update_deal_analytics(origin, destination, cabin_class, prices, best_cpp, source)
+
+    # Record search for analytics
+    duration_ms = int((time.time() - start_time) * 1000)
+    if user_id:
+        DealAnalyticsHandler.record_search(user_id, origin, destination, departure_date, cabin_class, len(flights), filters, duration_ms, source)
 
     # Check alerts
     search_results = {'origin': origin, 'destination': destination, 'flights': flights}
@@ -190,7 +226,9 @@ def search_flights():
         "flights": flights,
         "source": source,
         "count": len(flights),
-        "preferences_applied": bool(user_id)
+        "preferences_applied": bool(user_id),
+        "filters_applied": len([k for k in filters.keys() if filters[k] is not None]) > 0,
+        "duration_ms": duration_ms,
     }), 200
 
 
@@ -638,6 +676,117 @@ def deactivate_alert(alert_id):
         return jsonify({"message": "Alert deactivated"}), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# PHASE 2: Advanced Filtering, Analytics, Error Handling, Tax Breakdown
+# ============================================================================
+
+@app.route("/api/analytics/trending-routes", methods=["GET"])
+def get_trending_routes():
+    """Get trending routes based on search volume and conversion"""
+    days = int(request.args.get("days", 7))
+    limit = int(request.args.get("limit", 10))
+
+    try:
+        routes = DealAnalyticsHandler.get_trending_routes(days, limit)
+        return jsonify({
+            "routes": routes,
+            "count": len(routes),
+            "period_days": days
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analytics/pricing-patterns", methods=["GET"])
+def get_pricing_patterns():
+    """Get pricing patterns and trends for a route"""
+    origin = request.args.get("origin", "").upper()
+    destination = request.args.get("destination", "").upper()
+    days = int(request.args.get("days", 30))
+
+    if not all([origin, destination]):
+        return jsonify({"error": "Missing origin or destination"}), 400
+
+    try:
+        patterns = DealAnalyticsHandler.get_pricing_patterns(origin, destination, days)
+
+        if not patterns:
+            return jsonify({"error": "Insufficient data for analysis"}), 404
+
+        return jsonify(patterns), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analytics/deal-insights", methods=["GET"])
+def get_deal_insights():
+    """Get actionable deal insights"""
+    limit = int(request.args.get("limit", 20))
+
+    try:
+        insights = DealAnalyticsHandler.get_deal_insights(limit)
+        return jsonify(insights), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analytics/popular-destinations", methods=["GET"])
+def get_popular_destinations():
+    """Get popular destination cities"""
+    days = int(request.args.get("days", 30))
+    limit = int(request.args.get("limit", 10))
+
+    try:
+        destinations = DealAnalyticsHandler.get_popular_destinations(days, limit)
+        return jsonify({
+            "destinations": destinations,
+            "count": len(destinations)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/user/analytics", methods=["GET"])
+@jwt_required()
+def get_user_analytics():
+    """Get user behavior analytics"""
+    user_id = get_jwt_identity()
+
+    try:
+        analytics = UserAnalyticsHandler.get_user_analytics(user_id)
+        return jsonify(analytics), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/analytics/summary", methods=["GET"])
+@jwt_required()
+def get_analytics_summary():
+    """Get summary analytics (admin only)"""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+
+    # Simple admin check (in production, use proper role-based access)
+    if not user or user.email not in ['admin@example.com', 'admin@luxurytravelagent.com']:
+        return jsonify({"error": "Admin access required"}), 403
+
+    try:
+        from sqlalchemy import func
+
+        total_searches = db.session.query(func.count(SearchLog.id)).scalar() or 0
+        total_users = db.session.query(func.count(User.id)).scalar() or 0
+        total_alerts = db.session.query(func.count(Alert.id)).scalar() or 0
+
+        return jsonify({
+            "total_searches": total_searches,
+            "total_users": total_users,
+            "total_alerts": total_alerts,
+            "trending_routes": DealAnalyticsHandler.get_trending_routes(7, 5),
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

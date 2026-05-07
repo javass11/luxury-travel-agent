@@ -280,3 +280,112 @@ class AlertHistory(db.Model):
             'triggered_at': self.triggered_at.isoformat(),
             'notification_sent': self.notification_sent,
         }
+
+
+class DealAnalytics(db.Model):
+    """Route-level analytics for trending & insights"""
+    __tablename__ = 'deal_analytics'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    route_key = db.Column(db.String(10), nullable=False, index=True)
+    origin = db.Column(db.String(3), nullable=False, index=True)
+    destination = db.Column(db.String(3), nullable=False, index=True)
+    cabin = db.Column(db.String(20), default='economy')
+    date = db.Column(db.Date, nullable=False, index=True)
+
+    search_count = db.Column(db.Integer, default=0)
+    booking_count = db.Column(db.Integer, default=0)
+    conversion_rate = db.Column(db.Float)
+    avg_price = db.Column(db.Float)
+    min_price = db.Column(db.Float)
+    max_price = db.Column(db.Float)
+    best_cpp = db.Column(db.Float)
+    best_source = db.Column(db.String(50))
+    trending = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'route': f"{self.origin}-{self.destination}",
+            'cabin': self.cabin,
+            'search_count': self.search_count,
+            'booking_count': self.booking_count,
+            'conversion_rate': self.conversion_rate,
+            'avg_price': self.avg_price,
+            'price_range': {'min': self.min_price, 'max': self.max_price},
+            'best_cpp': self.best_cpp,
+            'best_source': self.best_source,
+            'trending': self.trending,
+        }
+
+
+class UserAnalytics(db.Model):
+    """User behavior analytics"""
+    __tablename__ = 'user_analytics'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False, unique=True)
+
+    total_searches = db.Column(db.Integer, default=0)
+    total_saved_deals = db.Column(db.Integer, default=0)
+    total_bookings = db.Column(db.Integer, default=0)
+    favorite_routes = db.Column(db.JSON, default=list)
+    favorite_airlines = db.Column(db.JSON, default=list)
+    avg_booking_lead_days = db.Column(db.Integer)
+    preferred_cabin_distribution = db.Column(db.JSON, default=dict)
+    last_search_date = db.Column(db.Date)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'total_searches': self.total_searches,
+            'total_saved_deals': self.total_saved_deals,
+            'total_bookings': self.total_bookings,
+            'favorite_routes': self.favorite_routes,
+            'favorite_airlines': self.favorite_airlines,
+            'avg_booking_lead_days': self.avg_booking_lead_days,
+            'preferred_cabin_distribution': self.preferred_cabin_distribution,
+            'last_search_date': self.last_search_date.isoformat() if self.last_search_date else None,
+        }
+
+
+class SearchLog(db.Model):
+    """Search history for analytics"""
+    __tablename__ = 'search_logs'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False, index=True)
+    origin = db.Column(db.String(3), nullable=False, index=True)
+    destination = db.Column(db.String(3), nullable=False, index=True)
+    departure_date = db.Column(db.Date, nullable=False, index=True)
+    cabin = db.Column(db.String(20))
+
+    results_count = db.Column(db.Integer, default=0)
+    filters_applied = db.Column(db.JSON, default=dict)
+    clicked_result_id = db.Column(db.String(120))
+    booked = db.Column(db.Boolean, default=False)
+    duration_ms = db.Column(db.Integer)
+    source = db.Column(db.String(50))
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'origin': self.origin,
+            'destination': self.destination,
+            'departure_date': self.departure_date.isoformat(),
+            'cabin': self.cabin,
+            'results_count': self.results_count,
+            'filters_applied': self.filters_applied,
+            'booked': self.booked,
+            'duration_ms': self.duration_ms,
+            'source': self.source,
+            'created_at': self.created_at.isoformat(),
+        }
