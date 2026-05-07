@@ -2,25 +2,20 @@ import os
 import requests
 import logging
 from typing import Any, Dict, Optional, List
+from ..travel_api_config import load_travel_api_config
 
 logger = logging.getLogger(__name__)
-
-
-def require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
 
 
 class SeatsAeroAPI:
     """Client for Seats.aero award availability search"""
 
     def __init__(self):
-        self.enabled = bool(os.getenv("SEATS_AERO_API_KEY"))
-        self.base_url = os.getenv("SEATS_AERO_BASE_URL", "https://seats.aero/partnerapi").rstrip("/")
+        config = load_travel_api_config()
+        self.api_key = config.seats_aero_api_key
+        self.base_url = config.seats_aero_base_url.rstrip("/")
         self.endpoint_path = os.getenv("SEATS_AERO_AVAILABILITY_PATH", "/search")
-        self.api_key = os.getenv("SEATS_AERO_API_KEY")
+        self.enabled = bool(self.api_key)
 
         if self.enabled:
             logger.info("Seats.aero API configured and enabled")

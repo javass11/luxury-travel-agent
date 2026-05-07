@@ -16,6 +16,7 @@ from .cache import cache
 from .redemption import evaluate_redemption, redemption_to_dict
 from .visualization import visualize_cpp_bar_chart, TravelRedemptionOption
 from .api_clients.seats_aero import SeatsAeroAPI
+from .travel_api_config import load_travel_api_config
 
 load_dotenv()
 
@@ -39,6 +40,9 @@ jwt = JWTManager(app)
 
 # Register blueprints
 app.register_blueprint(auth_bp)
+
+# Load centralized API configuration
+travel_api_config = load_travel_api_config()
 
 # Initialize API clients
 amadeus_api = AmadeusFlightAPI()

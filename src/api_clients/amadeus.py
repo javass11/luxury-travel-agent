@@ -2,6 +2,7 @@ import os
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime
+from ..travel_api_config import load_travel_api_config
 
 logger = logging.getLogger(__name__)
 
@@ -13,17 +14,18 @@ class AmadeusFlightAPI:
     """
 
     def __init__(self):
-        self.api_key = os.getenv('AMADEUS_API_KEY')
-        self.api_secret = os.getenv('AMADEUS_API_SECRET')
-        self.enabled = bool(self.api_key and self.api_secret)
+        config = load_travel_api_config()
+        self.client_id = config.amadeus_client_id
+        self.client_secret = config.amadeus_client_secret
+        self.enabled = bool(self.client_id and self.client_secret)
 
         if self.enabled:
             try:
                 # Lazy import to avoid dependency if not configured
                 from amadeus import Client
                 self.client = Client(
-                    client_id=self.api_key,
-                    client_secret=self.api_secret
+                    client_id=self.client_id,
+                    client_secret=self.client_secret
                 )
             except ImportError:
                 logger.warning("Amadeus SDK not installed, using fallback mode")
@@ -31,6 +33,8 @@ class AmadeusFlightAPI:
             except Exception as e:
                 logger.error(f"Failed to initialize Amadeus client: {e}")
                 self.enabled = False
+        else:
+            logger.warning("Amadeus API not configured, using demo mode")
 
     def search_flights(
         self,
